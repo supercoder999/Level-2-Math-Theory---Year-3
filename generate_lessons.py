@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate Grade 2 Math Theory – Lessons 1 to 100 (Year 2).
+Generate Grade 2 Math Theory – Lessons 1 to 100 (Year 3).
 Structure mirrors Year 3: 7 sections + bonus + answer key, with
 deterministic SVG diagrams across sections (not LLM placeholders).
 
@@ -1094,7 +1094,7 @@ def build_lesson(n, rng):
 </head>
 <body>
   <h1>🧠 Grade 2 Math Theory – Lesson {n}</h1>
-  <div class="meta">{subtitle} &nbsp;|&nbsp; Level: Year 2</div>
+  <div class="meta">{subtitle} &nbsp;|&nbsp; Level: Year 3</div>
   <div class="name-line">
     <span>Name:</span><span class="line"></span>
     <span>Date:</span><span class="line"></span>
