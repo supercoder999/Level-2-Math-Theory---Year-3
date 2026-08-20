@@ -220,19 +220,49 @@ def lesson_rng(n):
     return random.Random(n * 7919 + 31337)
 
 def tier(n):
-    if n <= 33: return 1
-    if n <= 66: return 2
-    return 3
+    if n <= 33:
+        return 1
+    if n <= 51:
+        return 2
+    return 3  # lessons 52–100: harder band
+
+def hard_lesson(n):
+    return n >= 52
 
 def max_num(n):
     t = tier(n)
-    if t == 1: return min(50 + n, 99)
-    if t == 2: return min(200 + n * 5, 999)
-    return min(500 + n * 10, 999)
+    if t == 1:
+        return min(50 + n, 99)
+    if t == 2:
+        return min(180 + n * 4, 500)
+    return min(450 + n * 5, 999)
 
 def mul_max(n):
     t = tier(n)
-    return {1: 5, 2: 9, 3: 12}[t]
+    return {1: 5, 2: 10, 3: 12}[t]
+
+def lesson_slot(n, which=1, count=5):
+    """Rotate question templates within a unit so neighbouring lessons differ."""
+    return ((n - 1) + (which - 1) * 2) % count
+
+def _pick_avoid(rng, options, recent):
+    opts = list(options)
+    fresh = [o for o in opts if o not in recent]
+    return rng.choice(fresh if fresh else opts)
+
+# Per-lesson trackers (reset each build_lesson)
+_RECENT_MUL = deque(maxlen=2)
+_RECENT_WORD = deque(maxlen=2)
+_RECENT_MEAS = deque(maxlen=2)
+_RECENT_GEO = deque(maxlen=2)
+_RECENT_FRAC = deque(maxlen=2)
+
+def reset_lesson_trackers():
+    _RECENT_MUL.clear()
+    _RECENT_WORD.clear()
+    _RECENT_MEAS.clear()
+    _RECENT_GEO.clear()
+    _RECENT_FRAC.clear()
 
 def _pal(rng):
     return rng.choice(PALETTES)
@@ -595,6 +625,8 @@ def sec_topic(n, rng, which):
     answers = []
     t = tier(n)
     hi = max_num(n)
+    slot = lesson_slot(n, which, 5)
+    hard = hard_lesson(n)
     used_diag = []
 
     def add(q, ans, diag=None, caption=None):
@@ -608,11 +640,23 @@ def sec_topic(n, rng, which):
 
     # Build 5 questions based on block
     if block == "place":
-        num = rng.randint(10, hi)
-        add(f'What is the value of the digit <strong>{(num//10)%10}</strong> in <strong>{num}</strong>? '
-            f'<span class="blank"></span>',
-            str(((num // 10) % 10) * 10),
-            svg_place_value(num), f"Place value of {num}")
+        if slot == 0:
+            num = rng.randint(10, hi)
+            add(f'What is the value of the digit <strong>{(num//10)%10}</strong> in <strong>{num}</strong>? '
+                f'<span class="blank"></span>',
+                str(((num // 10) % 10) * 10),
+                svg_place_value(num), f"Place value of {num}")
+            add(f'Expanded form: {num} = <span class="blank"></span> tens + <span class="blank"></span> ones',
+                f"{num//10} tens, {num%10} ones", svg_place_value(num), f"{num}")
+        elif slot == 1:
+            num = rng.randint(10, hi)
+            add(f'How many tens in <strong>{num}</strong>? <span class="blank"></span>', str(num // 10))
+            add(f'How many ones in <strong>{num}</strong>? <span class="blank"></span>', str(num % 10),
+                svg_place_value(num), f"{num}")
+        else:
+            num = rng.randint(10, hi)
+            add(f'What is the value of the tens digit in <strong>{num}</strong>? <span class="blank"></span>',
+                str((num // 10) * 10), svg_place_value(num), f"Place value of {num}")
         a, b = rng.randint(10, hi), rng.randint(10, hi)
         sym = ">" if a > b else ("<" if a < b else "=")
         add(f'Fill in &gt;, &lt;, or =: {a} <span class="blank"></span> {b}', sym)
@@ -620,14 +664,16 @@ def sec_topic(n, rng, which):
         mark = rng.randint(lo + 5, hi_nl - 5)
         add(f'What number is marked on the number line? <span class="blank"></span>',
             str(mark), svg_number_line(lo, hi_nl, mark), f"Number line {lo}–{hi_nl}")
-        filled = rng.randint(3, 9)
-        add(f'How many counters are in the ten-frame? <span class="blank"></span>',
-            str(filled), svg_ten_frame(filled), "Ten-frame")
-        skip = rng.choice([2, 5, 10])
-        start = rng.randint(1, 5) * skip
-        seq = [start + i * skip for i in range(5)]
-        add(f'What comes next? {", ".join(map(str, seq[:4]))}, <span class="blank"></span>',
-            str(seq[4]))
+        if slot % 2 == 0:
+            filled = rng.randint(3, 9)
+            add(f'How many counters are in the ten-frame? <span class="blank"></span>',
+                str(filled), svg_ten_frame(filled), "Ten-frame")
+        else:
+            skip = rng.choice([2, 5, 10])
+            start = rng.randint(1, 5) * skip
+            seq = [start + i * skip for i in range(5)]
+            add(f'What comes next? {", ".join(map(str, seq[:4]))}, <span class="blank"></span>',
+                str(seq[4]))
 
     elif block == "addsub":
         a = rng.randint(15, hi // 2 if hi > 40 else 40)
@@ -678,38 +724,64 @@ def sec_topic(n, rng, which):
             add(f'{a} × {b} = <span class="blank"></span>', str(a * b))
 
     elif block == "frac":
-        denom = rng.choice([2, 3, 4])
+        denom = rng.choice([2, 3, 4, 6, 8] if hard else [2, 3, 4])
         numer = rng.randint(1, denom - 1)
-        style = rng.choice(["bar", "pie"])
-        svg = svg_frac_bar(numer, denom, rng) if style == "bar" else svg_frac_pie(numer, denom, rng)
-        add(f'What fraction is shaded? <span class="blank"></span>',
-            f"{numer}/{denom}", svg, "Shaded fraction")
-        denom2 = rng.choice([2, 4])
-        numer2 = rng.randint(1, denom2 - 1)
-        add(f'What fraction is marked? <span class="blank"></span>',
-            f"{numer2}/{denom2}", svg_frac_numberline(numer2, denom2), "Fraction number line")
-        add(f'Which is larger: <strong>1/2</strong> or <strong>1/4</strong>? <span class="blank"></span>', "1/2")
-        add(f'Shade shows 1 out of 4 equal parts. Write the fraction: <span class="blank"></span>',
-            "1/4", svg_frac_pie(1, 4, rng), "One quarter")
-        add(f'How many halves make one whole? <span class="blank"></span>', "2")
+        if slot in (0, 2):
+            style = "pie" if slot == 0 else "bar"
+            svg = svg_frac_pie(numer, denom, rng) if style == "pie" else svg_frac_bar(numer, denom, rng)
+            add(f'What fraction is shaded? <span class="blank"></span>',
+                f"{numer}/{denom}", svg, "Shaded fraction")
+        else:
+            numer2 = rng.randint(1, denom - 1)
+            add(f'What fraction is marked? <span class="blank"></span>',
+                f"{numer2}/{denom}", svg_frac_numberline(numer2, denom), "Fraction number line")
+        if slot == 1:
+            whole = denom * rng.randint(2, 6 if hard else 4)
+            add(f'{numer}/{denom} of {whole} = <span class="blank"></span>', str(numer * whole // denom))
+        elif slot == 3:
+            add(f'Equivalent to 1/2: <span class="blank"></span>/4', "2")
+        else:
+            add(f'Which is larger: <strong>1/2</strong> or <strong>1/4</strong>? <span class="blank"></span>', "1/2")
+        if slot == 4:
+            add(f'How many quarters make one whole? <span class="blank"></span>', "4")
+        else:
+            add(f'Shade shows 1 out of 4 equal parts. Fraction: <span class="blank"></span>',
+                "1/4", svg_frac_pie(1, 4, rng), "One quarter")
+        if hard:
+            add(f'Compare: {numer}/{denom} vs 1/{denom}. Larger? <span class="blank"></span>',
+                f"{numer}/{denom}" if numer > 1 else f"1/{denom}")
+        else:
+            add(f'How many halves make one whole? <span class="blank"></span>', "2")
 
     elif block == "measure":
-        length = rng.randint(4, 10)
-        add(f'How long is the object? <span class="blank"></span> cm',
-            f"{length} cm", svg_ruler(length, rng), "Ruler")
-        h, m = rng.randint(1, 12), rng.choice([0, 30] if t == 1 else [0, 15, 30, 45])
+        if slot == 0:
+            length = rng.randint(4, 12 if hard else 10)
+            add(f'How long is the object? <span class="blank"></span> cm',
+                f"{length} cm", svg_ruler(length, rng), "Ruler")
+        elif slot == 1:
+            mv, cm = rng.randint(1, 5), rng.randint(100, 450 if hard else 350)
+            longer = f"{mv} m" if mv * 100 > cm else (f"{cm} cm" if cm > mv * 100 else "equal")
+            add(f'Which is longer: <strong>{mv} m</strong> or <strong>{cm} cm</strong>? <span class="blank"></span>', longer)
+        else:
+            temp = rng.randint(12, 38 if hard else 32)
+            add(f'What temperature is shown? <span class="blank"></span> °C',
+                f"{temp} °C", svg_thermometer(temp, rng), "Thermometer")
+        h, m = rng.randint(1, 12), rng.choice([0, 15, 30, 45] if hard else [0, 30])
         clock, ts = svg_clock(h, m)
         add(f'What time does the clock show? <span class="blank"></span>',
             ts, clock, f"Clock showing {ts}")
-        mv, cm = rng.randint(1, 5), rng.randint(50, 450)
-        longer = f"{mv} m" if mv * 100 > cm else f"{cm} cm"
-        if mv * 100 == cm:
-            longer = "equal"
-        add(f'Which is longer: <strong>{mv} m</strong> or <strong>{cm} cm</strong>? <span class="blank"></span>', longer)
-        temp = rng.randint(15, 32)
-        add(f'What temperature is shown? <span class="blank"></span> °C',
-            f"{temp} °C", svg_thermometer(temp, rng), "Thermometer")
-        add(f'How many minutes are in <strong>2</strong> hours? <span class="blank"></span>', "120")
+        if slot >= 2 and hard:
+            w, h_u = rng.randint(4, 12), rng.randint(3, 9)
+            add(f'Perimeter of {w}×{h_u} cm rectangle? <span class="blank"></span> cm',
+                f"{2*(w+h_u)} cm", svg_rect(w, h_u, rng), "Rectangle")
+        else:
+            add(f'How many minutes are in <strong>2</strong> hours? <span class="blank"></span>', "120")
+        if hard:
+            add(f'How many cm in <strong>3</strong> metres? <span class="blank"></span>', "300")
+        else:
+            mv, cm = rng.randint(1, 4), rng.randint(80, 350)
+            longer = f"{mv} m" if mv * 100 > cm else (f"{cm} cm" if cm > mv * 100 else "equal")
+            add(f'Longer: <strong>{mv} m</strong> or <strong>{cm} cm</strong>? <span class="blank"></span>', longer)
 
     elif block == "geo":
         sname = rng.choice(list(SHAPE_META))
@@ -731,42 +803,66 @@ def sec_topic(n, rng, which):
             f"{2*(w+h)} cm", svg_rect(w, h, rng), "Rectangle")
 
     elif block == "data":
-        items = [("Mon", rng.randint(2, 8)), ("Tue", rng.randint(2, 8)),
-                 ("Wed", rng.randint(2, 8)), ("Thu", rng.randint(2, 8))]
-        target = rng.choice(items)
-        add(f'How many on <strong>{target[0]}</strong>? <span class="blank"></span>',
-            str(target[1]), svg_bar_graph(items, rng), "Bar graph")
-        fruits = [("Apples", rng.randint(2, 5)), ("Pears", rng.randint(2, 5)),
-                  ("Oranges", rng.randint(2, 5))]
-        fi = rng.randint(0, 2)
-        add(f'Each ● = 1 fruit. How many <strong>{fruits[fi][0]}</strong>? <span class="blank"></span>',
-            str(fruits[fi][1]), svg_pictograph(fruits, rng), "Pictograph (● = 1)")
-        add(f'Which day has the most? <span class="blank"></span>',
-            max(items, key=lambda x: x[1])[0])
-        skip = rng.choice([2, 3, 5, 10])
+        items = [("Mon", rng.randint(2, 10 if hard else 8)), ("Tue", rng.randint(2, 10 if hard else 8)),
+                 ("Wed", rng.randint(2, 10 if hard else 8)), ("Thu", rng.randint(2, 10 if hard else 8))]
+        if slot % 2 == 0:
+            target = items[(n + which) % len(items)]
+            add(f'How many on <strong>{target[0]}</strong>? <span class="blank"></span>',
+                str(target[1]), svg_bar_graph(items[:3], rng), "Bar graph")
+            add(f'Which day has the most? <span class="blank"></span>',
+                max(items, key=lambda x: x[1])[0])
+        else:
+            fruits = [("Apples", rng.randint(2, 6)), ("Pears", rng.randint(2, 6)),
+                      ("Bananas", rng.randint(2, 6))]
+            fi = rng.randint(0, 2)
+            add(f'Each ● = 1 fruit. How many <strong>{fruits[fi][0]}</strong>? <span class="blank"></span>',
+                str(fruits[fi][1]), svg_pictograph(fruits, rng), "Pictograph (● = 1)")
+            add(f'Total fruit shown? <span class="blank"></span>',
+                str(sum(f for _, f in fruits)))
+        skip = rng.choice([2, 3, 5, 6 if hard else 5, 10])
         start = skip
         seq = [start + i * skip for i in range(5)]
         add(f'Rule: add {skip}. Missing: {seq[0]}, {seq[1]}, ___, {seq[3]}, {seq[4]} → '
             f'<span class="blank"></span>', str(seq[2]))
         add(f'Total for Mon + Tue? <span class="blank"></span>', str(items[0][1] + items[1][1]))
+        if hard:
+            add(f'Mean of Mon–Wed? <span class="blank"></span>',
+                str((items[0][1] + items[1][1] + items[2][1]) // 3))
+        else:
+            add(f'Difference Wed − Mon? <span class="blank"></span>',
+                str(items[2][1] - items[0][1]))
 
-    else:  # review — mix
-        num = rng.randint(20, hi)
-        add(f'Expanded form of <strong>{num}</strong>: tens and ones → '
-            f'<span class="blank"></span> tens, <span class="blank"></span> ones',
-            f"{num//10} tens, {num%10} ones", svg_place_value(num), f"{num}")
-        rows, cols = 3, rng.randint(3, 5)
-        add(f'Array total: <span class="blank"></span>',
-            str(rows * cols), svg_array(rows, cols, rng), f"{rows}×{cols}")
-        denom, numer = 4, rng.randint(1, 3)
-        add(f'Shaded fraction: <span class="blank"></span>',
-            f"{numer}/{denom}", svg_frac_pie(numer, denom, rng), "Fraction")
-        h, m = rng.randint(1, 12), rng.choice([0, 30])
-        clock, ts = svg_clock(h, m)
-        add(f'Time shown: <span class="blank"></span>', ts, clock, "Clock")
-        items = [("A", 4), ("B", 7), ("C", 3)]
-        add(f'Who has the most? <span class="blank"></span>',
-            "B", svg_bar_graph(items, rng), "Bar graph")
+    else:  # review — mix rotates by slot
+        order = list(range(5))
+        start = (slot + which - 1) % 5
+        order = order[start:] + order[:start]
+        for idx in order:
+            if len(answers) >= 5:
+                break
+            if idx == 0:
+                num = rng.randint(20, hi)
+                add(f'Expanded form of <strong>{num}</strong>: '
+                    f'<span class="blank"></span> tens, <span class="blank"></span> ones',
+                    f"{num//10} tens, {num%10} ones", svg_place_value(num), f"{num}")
+            elif idx == 1:
+                rows, cols = 3, rng.randint(3, 6 if hard else 5)
+                add(f'Array total: <span class="blank"></span>',
+                    str(rows * cols), svg_array(rows, cols, rng), f"{rows}×{cols}")
+            elif idx == 2:
+                numer, denom = rng.randint(1, 3), 4
+                add(f'Shaded fraction: <span class="blank"></span>',
+                    f"{numer}/{denom}", svg_frac_pie(numer, denom, rng), "Fraction")
+            elif idx == 3:
+                h, m = rng.randint(1, 12), rng.choice([0, 15, 30, 45] if hard else [0, 30])
+                clock, ts = svg_clock(h, m)
+                add(f'Time shown: <span class="blank"></span>', ts, clock, "Clock")
+            else:
+                items = [("A", rng.randint(3, 9)), ("B", rng.randint(3, 9)), ("C", rng.randint(3, 9))]
+                add(f'Who has the most? <span class="blank"></span>',
+                    max(items, key=lambda x: x[1])[0], svg_bar_graph(items, rng), "Bar graph")
+        if hard and len(answers) < 5:
+            a, b, c = rng.randint(2, 6), rng.randint(2, 6), rng.randint(10, 30)
+            add(f'{a} × {b} + {c} = <span class="blank"></span> <small>(× first)</small>', str(a * b + c))
 
     # Ensure exactly 5
     while len(answers) < 5:
@@ -779,267 +875,498 @@ def sec_topic(n, rng, which):
 
 def sec_muldiv(n, rng):
     t = tier(n)
+    hard = hard_lesson(n)
     tmax = mul_max(n)
+    slot = lesson_slot(n, 1, 5)
     html = '<ol class="q-list">'
     answers = []
-    rows, cols = rng.randint(2, 4), rng.randint(3, 5)
-    html += q_li(f'Write a multiplication fact for this array. '
-                 f'<span class="blank"></span> × <span class="blank"></span> = <span class="blank"></span><br>'
-                 + diagram(svg_array(rows, cols, rng), f"{rows} rows of {cols}"))
-    answers.append(("1", f"{rows} × {cols} = {rows*cols}"))
-    for i in range(2, 4):
+
+    q_specs = []
+
+    if slot == 0:
+        rows, cols = rng.randint(2, 4), rng.randint(3, 5)
+        q_specs.append((f'Write a multiplication for this array. '
+                        f'<span class="blank"></span> × <span class="blank"></span> = <span class="blank"></span><br>'
+                        + diagram(svg_array(rows, cols, rng), f"{rows} rows of {cols}"),
+                        f"{rows} × {cols} = {rows*cols}"))
         a, b = rng.randint(2, tmax), rng.randint(2, tmax)
-        html += q_li(f'{a} × {b} = <span class="blank"></span>')
-        answers.append((str(i), str(a * b)))
-    for i in range(4, 6):
-        b = rng.randint(2, tmax)
-        q = rng.randint(2, tmax)
-        html += q_li(f'{b*q} ÷ {b} = <span class="blank"></span>')
-        answers.append((str(i), str(q)))
+        q_specs.append((f'{a} × {b} = <span class="blank"></span>', str(a * b)))
+        b2 = rng.randint(2, tmax)
+        q_specs.append((f'{a*b} ÷ {a} = <span class="blank"></span>', str(b)))
+        g, p = rng.randint(2, 5), rng.randint(2, 6)
+        q_specs.append((f'{g} groups of {p} = <span class="blank"></span><br>'
+                        + diagram(svg_equal_groups(g, p, rng), f"{g} groups of {p}"),
+                        str(g * p)))
+        c, d = rng.randint(2, tmax), rng.randint(2, tmax)
+        opt, lbl = mc_html(rng, c * d, lo=1, spread=max(4, c * d // 3))
+        q_specs.append((f'{c} × {d} = ?{opt}', f"{lbl}) {c*d}"))
+
+    elif slot == 1:
+        g, p = rng.randint(3, 6), rng.randint(3, 7)
+        q_specs.append((f'Draw meaning: {g} × {p}. Total squares?<br>'
+                        + diagram(svg_array(min(g, 4), min(p, 6), rng), "Array model"),
+                        str(g * p)))
+        for a, b in [(rng.randint(2, tmax), rng.randint(2, tmax)) for _ in range(2)]:
+            q_specs.append((f'{a} × {b} = <span class="blank"></span>', str(a * b)))
+        total = rng.randint(3, tmax) * rng.randint(2, tmax)
+        div = rng.randint(2, tmax)
+        while total % div:
+            div = rng.randint(2, 5)
+            total = div * rng.randint(3, 8)
+        q_specs.append((f'{total} ÷ {div} = <span class="blank"></span>', str(total // div)))
+        if hard:
+            x, y = rng.randint(12, 45), rng.randint(2, 9)
+            q_specs.append((f'{x} × {y} = <span class="blank"></span>', str(x * y)))
+        else:
+            skip = rng.choice([2, 5, 10])
+            seq = [skip * i for i in range(1, 6)]
+            q_specs.append((f'Skip count by {skip}: {seq[0]}, {seq[1]}, ___, {seq[3]}, {seq[4]} → '
+                            f'<span class="blank"></span>', str(seq[2])))
+
+    elif slot == 2:
+        a, b = rng.randint(2, tmax), rng.randint(2, tmax)
+        prod = a * b
+        q_specs.append((f'Missing factor: <span class="blank"></span> × {b} = {prod}', str(a)))
+        q_specs.append((f'Fact family: {a} × {b} = {prod}, so {prod} ÷ {a} = <span class="blank"></span>', str(b)))
+        q_specs.append((f'Also {prod} ÷ {b} = <span class="blank"></span>', str(a)))
+        rows, cols = rng.randint(2, 3), rng.randint(4, 6)
+        q_specs.append((f'Repeated addition: {cols} + {cols} + … ({rows} times) = <span class="blank"></span><br>'
+                        + diagram(svg_array(rows, cols, rng), f"{rows} rows of {cols}"),
+                        str(rows * cols)))
+        if hard:
+            extra = ((n * 3) % 15) + 5
+            q_specs.append((f'Order: {a} × {b} + {extra} = <span class="blank"></span> '
+                            f'<br><small>(× first)</small>', str(a * b + extra)))
+        else:
+            x, y = rng.randint(2, tmax), rng.randint(2, tmax)
+            q_specs.append((f'{x} × {y} = <span class="blank"></span>', str(x * y)))
+
+    elif slot == 3:
+        pairs = [(rng.randint(2, tmax), rng.randint(2, tmax)) for _ in range(3)]
+        for a, b in pairs:
+            q_specs.append((f'{a} × {b} = <span class="blank"></span>', str(a * b)))
+        a, b = pairs[0]
+        q_specs.append((f'Which is greater: {a}×{b} or {(a-1)*b if a > 2 else a*(b+1)}? '
+                        f'<span class="blank"></span>', f"{a}×{b}"))
+        total, groups = rng.randint(4, 8) * rng.randint(3, 6), rng.randint(3, 6)
+        while total % groups:
+            groups = rng.randint(3, 5)
+            total = groups * rng.randint(4, 7)
+        q_specs.append((f'{total} shared into {groups} equal groups. Each group? <span class="blank"></span>',
+                        str(total // groups)))
+
+    else:  # slot 4
+        if hard:
+            x, m = rng.randint(11, 35), rng.randint(2, 9)
+            q_specs.append((f'2-digit × 1-digit: {x} × {m} = <span class="blank"></span>', str(x * m)))
+        a, b = rng.randint(2, tmax), rng.randint(2, tmax)
+        q_specs.append((f'{a} × {b} = <span class="blank"></span>', str(a * b)))
+        q_specs.append((f'{a*b} ÷ {b} = <span class="blank"></span>', str(a)))
+        g, p = rng.randint(2, 5), rng.randint(2, 6)
+        q_specs.append((f'Equal groups diagram total?<br>'
+                        + diagram(svg_equal_groups(g, p, rng), f"{g} groups of {p}"),
+                        str(g * p)))
+        c, d, e = rng.randint(2, 5), rng.randint(2, 5), rng.randint(8, 25)
+        q_specs.append((f'{c} × {d} + {e} = <span class="blank"></span>', str(c * d + e)))
+        if len(q_specs) < 5:
+            q_specs.append((f'{b} × {a} = <span class="blank"></span>', str(a * b)))
+
+    for q, ans in q_specs[:5]:
+        html += q_li(q)
+        answers.append((str(len(answers) + 1), ans))
     html += '</ol>'
+    _RECENT_MUL.append(slot)
     return "Section 3: Multiplication &amp; Division (15 mins)", html, answers
+
 
 def sec_word(n, rng):
     hi = max_num(n)
+    hard = hard_lesson(n)
+    thing = rng.choice(THINGS)
+    name = rng.choice(NAMES)
+    slot = lesson_slot(n, 2, 5)
     html = '<ol class="q-list">'
     answers = []
-    # Q1 with part-whole diagram
-    name = rng.choice(NAMES)
-    thing = rng.choice(THINGS)
-    a, b = rng.randint(12, min(40, hi // 2 + 10)), rng.randint(8, 25)
-    html += q_li(f'<strong>{name}</strong> has <strong>{a} {thing}</strong> and gets '
-                 f'<strong>{b} more</strong>. How many in total?<br>'
-                 + diagram(svg_part_whole(a + b, a, b, rng, hide="w"), "Part–whole for the story")
-                 + f'Answer: <span class="blank"></span> {thing}')
-    answers.append(("1", str(a + b)))
-    # Q2 equal groups
-    g, p = rng.randint(3, 6), rng.randint(3, 8)
-    html += q_li(f'<strong>{g} boxes</strong> each hold <strong>{p} {thing}</strong>. Total?<br>'
-                 + diagram(svg_equal_groups(min(g, 5), min(p, 6), rng), "Equal groups")
-                 + f'Answer: <span class="blank"></span>')
-    answers.append(("2", str(g * p)))
-    # Q3 share
-    groups = rng.randint(3, 6)
-    per = rng.randint(4, 9)
-    total = groups * per
-    html += q_li(f'<strong>{total} {thing}</strong> shared equally into <strong>{groups}</strong> groups. '
-                 f'How many per group? <span class="blank"></span>')
-    answers.append(("3", str(per)))
-    # Q4 money
-    price = rng.choice([2000, 5000, 10000, 15000])
-    qty = rng.randint(2, 6)
-    html += q_li(f'Each item costs <strong>{price:,} VND</strong>. Buy <strong>{qty}</strong>. Total cost? '
-                 f'<span class="blank"></span> VND'.replace(",", "."))
-    answers.append(("4", str(price * qty)))
-    # Q5 multi-step
-    trays, per_t, give = rng.randint(3, 6), rng.randint(4, 8), rng.randint(5, 15)
-    html += q_li(f'<strong>{trays} trays</strong> × <strong>{per_t} {thing}</strong>, then '
-                 f'<strong>{give}</strong> given away. Left? <span class="blank"></span>')
-    answers.append(("5", str(trays * per_t - give)))
-    html += '</ol>'
+
+    templates = []
+
+    if slot == 0:
+        a, b = rng.randint(12, min(40, hi // 2 + 10)), rng.randint(8, 25)
+        templates.append((f'<strong>{name}</strong> has <strong>{a} {thing}</strong> and gets '
+                          f'<strong>{b} more</strong>. Total?<br>'
+                          + diagram(svg_part_whole(a + b, a, b, rng, hide="w"), "Part–whole")
+                          + f'Answer: <span class="blank"></span>', str(a + b)))
+        have, give = rng.randint(25, min(60, hi)), rng.randint(5, 20)
+        templates.append((f'<strong>{rng.choice(NAMES)}</strong> has {have} {thing} and gives away {give}. '
+                          f'Left? <span class="blank"></span>', str(have - give)))
+        g, p = rng.randint(3, 6), rng.randint(3, 8)
+        templates.append((f'{g} boxes × {p} {thing}. Total?<br>'
+                          + diagram(svg_equal_groups(min(g, 5), min(p, 6), rng), "Equal groups")
+                          + f'Answer: <span class="blank"></span>', str(g * p)))
+        total, groups = rng.randint(4, 9) * rng.randint(3, 6), rng.randint(3, 6)
+        while total % groups:
+            groups = rng.randint(3, 5)
+            total = groups * rng.randint(4, 8)
+        templates.append((f'{total} {thing} shared equally into {groups} groups. Each? <span class="blank"></span>',
+                          str(total // groups)))
+        price, qty = rng.choice([2000, 5000, 10000]), rng.randint(2, 5)
+        templates.append((f'Each costs {price:,} VND. Buy {qty}. Total? <span class="blank"></span> VND'.replace(",", "."),
+                          str(price * qty)))
+
+    elif slot == 1:
+        red, blue = rng.randint(8, 25), rng.randint(8, 25)
+        while red == blue:
+            blue = rng.randint(8, 25)
+        more = "red" if red > blue else "blue"
+        templates.append((f'{red} red and {blue} blue {thing}. Which colour has more? <span class="blank"></span>',
+                          more))
+        a, b = rng.randint(20, min(70, hi)), rng.randint(10, 35)
+        templates.append((f'{a} − {b} = ?  (story: {name} had {a}, used {b}) <span class="blank"></span>', str(a - b)))
+        g, p = rng.randint(3, 7), rng.randint(3, 9)
+        templates.append((f'{name} packs {g} bags with {p} {thing} each. Total? <span class="blank"></span>', str(g * p)))
+        trays, per_t = rng.randint(3, 6), rng.randint(4, 8)
+        templates.append((f'{trays} trays with {per_t} each. How many {thing}? <span class="blank"></span>',
+                          str(trays * per_t)))
+        if hard:
+            a, b, c = rng.randint(30, 80), rng.randint(2, 6), rng.randint(2, 6)
+            templates.append((f'{a} {thing}, then {b} groups of {c} more arrive. Total? <span class="blank"></span>',
+                              str(a + b * c)))
+        else:
+            templates.append((f'How many more: {red} or {blue}? Difference? <span class="blank"></span>',
+                              str(abs(red - blue))))
+
+    elif slot == 2:
+        start = rng.randint(15, 40)
+        more = rng.randint(5, 20)
+        templates.append((f'{name} collects {start} {thing}, then {more} more. Total? <span class="blank"></span>',
+                          str(start + more)))
+        total = rng.randint(5, 9) * rng.randint(4, 8)
+        groups = rng.randint(3, 6)
+        while total % groups:
+            groups = rng.randint(3, 5)
+            total = groups * rng.randint(5, 8)
+        templates.append((f'{total} {thing} ÷ {groups} groups = <span class="blank"></span> each', str(total // groups)))
+        price = rng.choice([3000, 7000, 12000, 15000])
+        paid = price * rng.randint(2, 4)
+        templates.append((f'Paid {paid:,} VND for {price:,} VND items. How many bought? <span class="blank"></span>'.replace(",", "."),
+                          str(paid // price)))
+        w, h = rng.randint(3, 8), rng.randint(2, 6)
+        templates.append((f'A rectangle sticker is {w} cm by {h} cm. Perimeter? <span class="blank"></span> cm',
+                          str(2 * (w + h))))
+        if hard:
+            trays, per_t, give = rng.randint(4, 7), rng.randint(5, 9), rng.randint(8, 20)
+            templates.append((f'{trays}×{per_t} {thing}, then {give} given away. Left? <span class="blank"></span>',
+                              str(trays * per_t - give)))
+        else:
+            a, b = rng.randint(10, 30), rng.randint(2, 9)
+            templates.append((f'{a} × {b} stickers on a page. Total? <span class="blank"></span>', str(a * b)))
+
+    elif slot == 3:
+        d1, d2 = rng.randint(10, 30), rng.randint(10, 30)
+        templates.append((f'Monday {d1}, Tuesday {d2}. Total for two days? <span class="blank"></span>', str(d1 + d2)))
+        templates.append((f'Difference between {max(d1,d2)} and {min(d1,d2)}? <span class="blank"></span>',
+                          str(abs(d1 - d2))))
+        g, p = rng.randint(4, 8), rng.randint(3, 7)
+        templates.append((f'{g} rows of {p} {thing}. Total?<br>'
+                          + diagram(svg_array(min(g, 4), min(p, 6), rng), "Array")
+                          + f'Answer: <span class="blank"></span>', str(g * p)))
+        if hard:
+            a, b, c = rng.randint(2, 6), rng.randint(2, 6), rng.randint(10, 30)
+            templates.append((f'{a} × {b} + {c} = ? <span class="blank"></span> <small>(× first)</small>',
+                              str(a * b + c)))
+            templates.append((f'{a} × {b} − {c} = ? <span class="blank"></span> <small>(× first)</small>',
+                              str(a * b - c)))
+        else:
+            have, need = rng.randint(20, 50), rng.randint(30, 70)
+            templates.append((f'Has {have}, needs {need}. How many more? <span class="blank"></span>', str(need - have)))
+            templates.append((f'{have} + {need - have} = <span class="blank"></span>', str(need)))
+
+    else:  # slot 4 — mixed / challenge stories
+        if hard:
+            a, b, c = rng.randint(40, 120), rng.randint(3, 8), rng.randint(3, 8)
+            templates.append((f'Store has {a} {thing}. Sells {b} bags of {c}. Left? <span class="blank"></span>',
+                              str(a - b * c)))
+            x, m = rng.randint(12, 35), rng.randint(3, 9)
+            templates.append((f'{x} packs × {m} {thing} each = <span class="blank"></span>', str(x * m)))
+        else:
+            a, b = rng.randint(15, 45), rng.randint(8, 25)
+            templates.append((f'{a} + {b} = ? <span class="blank"></span>', str(a + b)))
+            templates.append((f'{a + b} − {b} = <span class="blank"></span>', str(a)))
+        total, r1, r2 = rng.choice([24, 36, 48]), 2, 3
+        templates.append((f'Share {total} in ratio {r1}:{r2} (smaller share)? <span class="blank"></span>',
+                          str(total * r1 // (r1 + r2))))
+        sh, sm, ah, am = rng.randint(7, 14), rng.choice([0, 15, 30]), rng.randint(1, 3), rng.choice([0, 15, 30])
+        em = (sm + am) % 60
+        eh = (sh + ah + (sm + am) // 60) % 24
+        templates.append((f'Start {sh}:{sm:02d}, wait {ah}h {am}min. Time? <span class="blank"></span>',
+                          f"{eh}:{em:02d}"))
+
+    while len(templates) < 5:
+        a, b = rng.randint(3, 9), rng.randint(3, 9)
+        templates.append((f'{a} × {b} = <span class="blank"></span>', str(a * b)))
+
+    html = '<ol class="q-list">' + "".join(q_li(q) for q, _ in templates[:5]) + '</ol>'
+    answers = [(str(i + 1), a) for i, (_, a) in enumerate(templates[:5])]
+    _RECENT_WORD.append(slot)
     return "Section 4: Word Problems (20 mins)", html, answers
+
 
 def sec_measure(n, rng):
     t = tier(n)
+    hard = hard_lesson(n)
+    slot = lesson_slot(n, 3, 5)
     html = '<ol class="q-list">'
     answers = []
-    # conversion
+
+    def add(q, ans, diag=None, cap=None):
+        answers.append((str(len(answers) + 1), ans))
+        body = q + (("<br>" + diagram(diag, cap)) if diag else "")
+        nonlocal html
+        html += q_li(body)
+
     facts = [
-        ("minutes in {a} hour(s)", lambda a: a * 60, (2, 5)),
+        ("minutes in {a} hour(s)", lambda a: a * 60, (2, 5 if not hard else 6)),
         ("cm in {a} metre(s)", lambda a: a * 100, (2, 6)),
-        ("g in {a} kg", lambda a: a * 1000, (2, 5)),
+        ("g in {a} kg", lambda a: a * 1000, (2, 4)),
         ("days in {a} week(s)", lambda a: a * 7, (2, 6)),
+        ("months in {a} year(s)", lambda a: a * 12, (1, 2)),
     ]
-    fact = rng.choice(facts)
+    fact = facts[(n + slot) % len(facts)]
     a_val = rng.randint(*fact[2])
-    ans = fact[1](a_val)
-    html += q_li(f'How many {fact[0].format(a=a_val)}? <span class="blank"></span>')
-    answers.append(("1", str(ans)))
-    # elapsed
-    sh, sm = rng.randint(7, 16), rng.choice([0, 15, 30, 45])
-    add_h, add_m = rng.randint(1, 3), rng.choice([0, 15, 30, 45])
-    tot = sm + add_m
-    eh = (sh + add_h + tot // 60) % 24
-    em = tot % 60
-    html += q_li(f'Start <strong>{sh}:{sm:02d}</strong>. After <strong>{add_h}h {add_m}min</strong>, '
-                 f'time is? <span class="blank"></span>')
-    answers.append(("2", f"{eh}:{em:02d}"))
-    # compare
-    mv, cm = rng.randint(1, 4), rng.randint(80, 350)
-    longer = f"{mv} m" if mv * 100 > cm else (f"{cm} cm" if cm > mv * 100 else "equal")
-    html += q_li(f'Longer: <strong>{mv} m</strong> or <strong>{cm} cm</strong>? <span class="blank"></span>')
-    answers.append(("3", longer))
-    # diagram: rotate clock / ruler / thermometer
-    choice = rng.choice(["clock", "ruler", "thermo"] if t >= 2 else ["clock", "ruler"])
-    if choice == "clock":
-        h, m = rng.randint(1, 12), rng.choice([0, 30] if t == 1 else [0, 15, 30, 45])
-        clock, ts = svg_clock(h, m)
-        html += q_li(f'What time does the clock show?<br>'
-                     + diagram(clock, f"Clock showing {ts}")
-                     + 'Answer: <span class="blank"></span>')
-        answers.append(("4", ts))
-    elif choice == "ruler":
-        length = rng.randint(4, 12)
-        html += q_li(f'Read the ruler length:<br>'
-                     + diagram(svg_ruler(length, rng), "Ruler in cm")
-                     + 'Length = <span class="blank"></span> cm')
-        answers.append(("4", f"{length} cm"))
+    add(f'How many {fact[0].format(a=a_val)}? <span class="blank"></span>', str(fact[1](a_val)))
+
+    if slot % 2 == 0:
+        sh, sm = rng.randint(7, 16), rng.choice([0, 15, 30, 45] if hard else [0, 30])
+        add_h, add_m = rng.randint(1, 4 if hard else 3), rng.choice([0, 15, 30, 45])
+        tot = sm + add_m
+        eh = (sh + add_h + tot // 60) % 24
+        em = tot % 60
+        add(f'Start <strong>{sh}:{sm:02d}</strong>. After <strong>{add_h}h {add_m}min</strong>, time? '
+            f'<span class="blank"></span>', f"{eh}:{em:02d}")
     else:
-        temp = rng.randint(12, 35)
-        html += q_li(f'Read the thermometer:<br>'
-                     + diagram(svg_thermometer(temp, rng), "Thermometer")
-                     + 'Temperature = <span class="blank"></span> °C')
-        answers.append(("4", f"{temp} °C"))
-    # perimeter
-    w, h = rng.randint(3, 9), rng.randint(2, 7)
-    html += q_li(f'Perimeter of this rectangle?<br>'
-                 + diagram(svg_rect(w, h, rng), "Rectangle")
-                 + 'Perimeter = <span class="blank"></span> cm')
-    answers.append(("5", f"{2*(w+h)} cm"))
+        h1, m1 = rng.randint(8, 14), rng.choice([0, 15, 30, 45])
+        h2, m2 = rng.randint(1, 5), rng.choice([0, 15, 30, 45])
+        start_m = h1 * 60 + m1
+        end_m = h2 * 60 + m2
+        diff = end_m - start_m if end_m > start_m else (12 * 60 + end_m) - start_m
+        add(f'From {h1}:{m1:02d} to {h2}:{m2:02d} (same morning) is how many minutes? '
+            f'<span class="blank"></span>', str(diff))
+
+    mv, cm = rng.randint(1, 5 if hard else 4), rng.randint(80, 450 if hard else 350)
+    longer = f"{mv} m" if mv * 100 > cm else (f"{cm} cm" if cm > mv * 100 else "equal")
+    add(f'Longer: <strong>{mv} m</strong> or <strong>{cm} cm</strong>? <span class="blank"></span>', longer)
+
+    choice = _pick_avoid(rng, ["clock", "ruler", "thermo"], _RECENT_MEAS)
+    _RECENT_MEAS.append(choice)
+    if choice == "clock":
+        h, m = rng.randint(1, 12), rng.choice([0, 15, 30, 45] if t >= 2 else [0, 30])
+        clock, ts = svg_clock(h, m)
+        add(f'What time does the clock show?', ts, clock, f"Clock {ts}")
+    elif choice == "ruler":
+        length = rng.randint(4, 14 if hard else 12)
+        add(f'Read the ruler length: <span class="blank"></span> cm', f"{length} cm",
+            svg_ruler(length, rng), "Ruler")
+    else:
+        temp = rng.randint(10, 38 if hard else 32)
+        add(f'Read the thermometer: <span class="blank"></span> °C', f"{temp} °C",
+            svg_thermometer(temp, rng), "Thermometer")
+
+    if hard and slot >= 2:
+        w, h = rng.randint(4, 12), rng.randint(3, 9)
+        add(f'Perimeter AND area: rectangle {w} cm × {h} cm. Perimeter = <span class="blank"></span> cm, '
+            f'Area = <span class="blank"></span> cm²', f"P={2*(w+h)} cm, A={w*h} cm²",
+            svg_rect(w, h, rng), "Rectangle")
+    else:
+        w, h = rng.randint(3, 9), rng.randint(2, 7)
+        add(f'Perimeter of this rectangle? <span class="blank"></span> cm', f"{2*(w+h)} cm",
+            svg_rect(w, h, rng), "Rectangle")
+
     html += '</ol>'
     return "Section 5: Measurement &amp; Time (10 mins)", html, answers
 
+
 def sec_geo_data(n, rng):
     t = tier(n)
+    hard = hard_lesson(n)
+    slot = lesson_slot(n, 4, 5)
     html = '<ol class="q-list">'
     answers = []
-    # shape
-    sname = rng.choice(list(SHAPE_META))
-    html += q_li(f'Name this shape:<br>'
-                 + diagram(svg_shape(sname, rng), sname)
-                 + '<span class="blank"></span>')
-    answers.append(("1", sname))
-    # sides or symmetry
-    s2 = rng.choice([s for s in SHAPE_META if s != "Circle"])
-    if rng.random() < 0.5:
-        html += q_li(f'How many vertices does a <strong>{s2}</strong> have?<br>'
-                     + diagram(svg_shape(s2, rng), s2)
-                     + '<span class="blank"></span>')
-        answers.append(("2", str(SHAPE_META[s2][0])))
-    else:
-        html += q_li(f'Lines of symmetry on this <strong>{s2}</strong>?<br>'
-                     + diagram(svg_shape(s2, rng, symmetry=(s2 in ("Square", "Rectangle"))), s2)
-                     + '<span class="blank"></span>')
-        answers.append(("2", str(SHAPE_META[s2][1])))
-    # area grid or angle
-    if t >= 2 and rng.random() < 0.5:
+
+    def add(q, ans, diag=None, cap=None):
+        answers.append((str(len(answers) + 1), ans))
+        body = q + (("<br>" + diagram(diag, cap)) if diag else "")
+        nonlocal html
+        html += q_li(body)
+
+    modes = ["shape", "sym", "angle", "area", "bar", "picto", "tf"]
+    order = modes[slot:] + modes[:slot]
+    used = 0
+
+    if "shape" in order[:3]:
+        sname = rng.choice(list(SHAPE_META))
+        add(f'Name this shape: <span class="blank"></span>', sname, svg_shape(sname, rng), sname)
+        used += 1
+    if used < 5 and "sym" in order:
+        sq = rng.choice(["Square", "Rectangle", "Diamond"])
+        add(f'Lines of symmetry on this {sq}? <span class="blank"></span>',
+            str(SHAPE_META[sq][1]), svg_shape(sq, rng, symmetry=(sq in ("Square", "Rectangle"))), sq)
+        used += 1
+    if used < 5 and "angle" in order and t >= 2:
         kind = rng.choice(["right", "acute", "obtuse"])
         label = {"right": "Right angle", "acute": "Acute angle", "obtuse": "Obtuse angle"}[kind]
-        html += q_li(f'Angle type?<br>' + diagram(svg_angle(kind, rng), "Angle")
-                     + '<span class="blank"></span>')
-        answers.append(("3", label))
-    else:
-        cols, rows = rng.randint(3, 5), rng.randint(2, 4)
+        add(f'Angle type? <span class="blank"></span>', label, svg_angle(kind, rng), "Angle")
+        used += 1
+    if used < 5 and "area" in order:
+        cols, rows = rng.randint(3, 6 if hard else 5), rng.randint(2, 5)
         shaded = set(rng.sample(range(cols * rows), rng.randint(3, cols * rows - 1)))
-        html += q_li(f'Each square = 1 cm². Shaded area?<br>'
-                     + diagram(svg_grid_area(cols, rows, shaded, rng), "Area grid")
-                     + 'Area = <span class="blank"></span> cm²')
-        answers.append(("3", f"{len(shaded)} cm²"))
-    # data diagram
-    if rng.random() < 0.5:
-        items = [(rng.choice(["Red", "Blue", "Green", "Yellow"]), rng.randint(2, 8)) for _ in range(3)]
-        # unique labels
-        labs = ["Red", "Blue", "Green"]
-        items = [(labs[i], rng.randint(2, 8)) for i in range(3)]
-        best = max(items, key=lambda x: x[1])[0]
-        html += q_li(f'Which colour has the most?<br>'
-                     + diagram(svg_bar_graph(items, rng), "Bar graph")
-                     + '<span class="blank"></span>')
-        answers.append(("4", best))
-    else:
-        fruits = [("Apples", rng.randint(2, 5)), ("Pears", rng.randint(2, 5)), ("Bananas", rng.randint(2, 5))]
-        html += q_li(f'Each ● = 1. How many Apples?<br>'
-                     + diagram(svg_pictograph(fruits, rng), "Pictograph")
-                     + '<span class="blank"></span>')
-        answers.append(("4", str(fruits[0][1])))
-    # TF shape fact
-    facts = [
-        ("A triangle has 3 sides.", True),
-        ("A square has 5 sides.", False),
-        ("A hexagon has 6 sides.", True),
-        ("A circle has 4 vertices.", False),
-    ]
-    stmt, ok = rng.choice(facts)
-    qh, ans = tf_html(stmt, ok)
-    html += q_li(qh)
-    answers.append(("5", ans))
+        add(f'Each square = 1 cm². Shaded area? <span class="blank"></span>',
+            f"{len(shaded)} cm²", svg_grid_area(cols, rows, shaded, rng), "Area grid")
+        used += 1
+    if used < 5 and "bar" in order:
+        labs = ["Red", "Blue", "Green", "Yellow"][:3 + (1 if hard else 0)]
+        items = [(lab, rng.randint(2, 10 if hard else 8)) for lab in labs[:3]]
+        add(f'Which colour has the most? <span class="blank"></span>',
+            max(items, key=lambda x: x[1])[0], svg_bar_graph(items, rng), "Bar graph")
+        used += 1
+    if used < 5 and "picto" in order:
+        fruits = [("Apples", rng.randint(2, 6)), ("Pears", rng.randint(2, 6)), ("Bananas", rng.randint(2, 6))]
+        fi = rng.randint(0, 2)
+        add(f'Each ● = 1. How many {fruits[fi][0]}? <span class="blank"></span>',
+            str(fruits[fi][1]), svg_pictograph(fruits, rng), "Pictograph")
+        used += 1
+    while used < 5:
+        facts = [
+            ("A triangle has 3 sides.", True),
+            ("A square has 5 sides.", False),
+            ("A hexagon has 6 sides.", True),
+            ("A circle has 4 vertices.", False),
+            ("A right angle is 90°.", True),
+        ]
+        stmt, ok = facts[(n + used) % len(facts)]
+        qh, ans = tf_html(stmt, ok)
+        add(qh, ans)
+        used += 1
+
     html += '</ol>'
+    _RECENT_GEO.append(slot)
     return "Section 6: Geometry &amp; Data (10 mins)", html, answers
+
 
 def sec_fractions(n, rng):
     t = tier(n)
+    hard = hard_lesson(n)
+    slot = lesson_slot(n, 5, 5)
     html = '<ol class="q-list">'
     answers = []
-    denoms = [2, 3, 4] if t == 1 else [2, 3, 4, 5, 6, 8]
-    # pie
-    d = rng.choice(denoms)
-    num = rng.randint(1, d - 1)
-    html += q_li(f'What fraction of the circle is shaded?<br>'
-                 + diagram(svg_frac_pie(num, d, rng), "Fraction circle")
-                 + '<span class="blank"></span>')
-    answers.append(("1", f"{num}/{d}"))
-    # bar
-    d2 = rng.choice(denoms)
-    num2 = rng.randint(1, d2 - 1)
-    html += q_li(f'What fraction of the bar is shaded?<br>'
-                 + diagram(svg_frac_bar(num2, d2, rng), "Fraction bar")
-                 + '<span class="blank"></span>')
-    answers.append(("2", f"{num2}/{d2}"))
-    # number line
-    d3 = rng.choice([2, 4] if t == 1 else [2, 3, 4, 5])
-    num3 = rng.randint(1, d3 - 1)
-    html += q_li(f'What fraction is marked on the number line?<br>'
-                 + diagram(svg_frac_numberline(num3, d3), "Fraction number line")
-                 + '<span class="blank"></span>')
-    answers.append(("3", f"{num3}/{d3}"))
-    # unshaded
-    d4 = rng.choice([2, 3, 4])
-    num4 = rng.randint(1, d4 - 1)
-    html += q_li(f'What fraction is <em>NOT</em> shaded?<br>'
-                 + diagram(svg_frac_bar(num4, d4, rng), "Fraction bar")
-                 + '<span class="blank"></span>')
-    answers.append(("4", f"{d4-num4}/{d4}"))
-    # compare or set
-    if rng.random() < 0.5:
-        html += q_li(f'Which is greater: <strong>3/4</strong> or <strong>1/4</strong>? <span class="blank"></span>')
-        answers.append(("5", "3/4"))
-    else:
-        opt, lbl = mc_html(rng, None, text_options=[
-            ("1/2", True), ("1/3", False), ("1/4", False), ("2/2", False)])
-        html += q_li(f'Which fraction means one half?{opt}')
-        answers.append(("5", f"{lbl}) 1/2"))
+    denoms = [2, 3, 4] if t == 1 else ([2, 3, 4, 5, 6, 8] if hard else [2, 3, 4, 5, 6])
+
+    styles = ["pie", "bar", "numberline", "set", "compare"]
+    rot = styles[slot:] + styles[:slot]
+
+    def add(q, ans, diag=None, cap=None):
+        answers.append((str(len(answers) + 1), ans))
+        body = q + (("<br>" + diagram(diag, cap)) if diag else "")
+        nonlocal html
+        html += q_li(body)
+
+    for style in rot:
+        if len(answers) >= 5:
+            break
+        d = rng.choice(denoms)
+        num = rng.randint(1, d - 1)
+        if style == "pie":
+            add(f'Fraction of the circle shaded? <span class="blank"></span>',
+                f"{num}/{d}", svg_frac_pie(num, d, rng), "Fraction circle")
+        elif style == "bar":
+            add(f'Fraction of the bar shaded? <span class="blank"></span>',
+                f"{num}/{d}", svg_frac_bar(num, d, rng), "Fraction bar")
+        elif style == "numberline":
+            d2 = rng.choice([2, 4, 5, 8] if hard else [2, 4])
+            n2 = rng.randint(1, d2 - 1)
+            add(f'Fraction on the number line? <span class="blank"></span>',
+                f"{n2}/{d2}", svg_frac_numberline(n2, d2), "Fraction number line")
+        elif style == "set":
+            whole = d * rng.randint(2, 6 if hard else 4)
+            add(f'{num}/{d} of {whole} = <span class="blank"></span>', str(num * whole // d))
+        elif style == "compare":
+            add(f'Which is greater: <strong>{num}/{d}</strong> or <strong>1/{d}</strong>? '
+                f'<span class="blank"></span>', f"{num}/{d}" if num > 1 else "1/{d}")
+
+    while len(answers) < 5:
+        d4 = rng.choice(denoms)
+        n4 = rng.randint(1, d4 - 1)
+        add(f'Fraction NOT shaded? <span class="blank"></span>',
+            f"{d4-n4}/{d4}", svg_frac_bar(n4, d4, rng), "Fraction bar")
+
     html += '</ol>'
-    return "Section 7: Fractions (15 mins)", html, answers
+    _RECENT_FRAC.append(slot)
+    title = "Section 7: Fractions &amp; Proportion (15 mins)" if hard else "Section 7: Fractions (15 mins)"
+    return title, html, answers
+
 
 def sec_bonus(n, rng):
     t = tier(n)
+    hard = hard_lesson(n)
     html = '<ol class="q-list">'
     answers = []
-    if t == 1:
+    slot = n % 5
+
+    if hard:
+        if slot == 0:
+            a, b, c, d = rng.randint(60, 200), rng.randint(2, 9), rng.randint(2, 9), rng.randint(15, 50)
+            html += q_li(f'({a} + {d}) − {b} × {c} = <span class="blank"></span> <small>(× first)</small>')
+            answers.append(("B1", str((a + d) - b * c)))
+        elif slot == 1:
+            w, h = rng.randint(4, 12), rng.randint(3, 9)
+            html += q_li(f'Perimeter {w}×{h} rectangle? <span class="blank"></span> cm; '
+                           f'Area? <span class="blank"></span> cm²')
+            answers.append(("B1", f"P={2*(w+h)}, A={w*h}"))
+        elif slot == 2:
+            num, den = rng.randint(1, 5), rng.choice([4, 6, 8])
+            whole = den * rng.randint(3, 8)
+            html += q_li(f'{num}/{den} of {whole} = <span class="blank"></span>')
+            answers.append(("B1", str(num * whole // den)))
+        elif slot == 3:
+            x, m = rng.randint(11, 40), rng.randint(3, 9)
+            html += q_li(f'Challenge: {x} × {m} = <span class="blank"></span>')
+            answers.append(("B1", str(x * m)))
+        else:
+            sh, sm, ah, am = 9, 15, 2, 45
+            em = (sm + am) % 60
+            eh = (sh + ah + (sm + am) // 60) % 24
+            html += q_li(f'Start {sh}:{sm:02d}, add {ah}h {am}min. Time? <span class="blank"></span>')
+            answers.append(("B1", f"{eh}:{em:02d}"))
+    elif t == 1:
         a, b, c = rng.randint(20, 60), rng.randint(10, 30), rng.randint(5, 20)
         html += q_li(f'{a} + {b} − {c} = <span class="blank"></span>')
         answers.append(("B1", str(a + b - c)))
     else:
-        a, b, c, d = rng.randint(50, 200), rng.randint(2, 9), rng.randint(2, 9), rng.randint(10, 40)
-        html += q_li(f'({a} + {d}) − {b} × {c} = <span class="blank"></span>'
-                     f'<br><small>(Multiply first)</small>')
+        a, b, c, d = rng.randint(50, 150), rng.randint(2, 9), rng.randint(2, 9), rng.randint(10, 35)
+        html += q_li(f'({a} + {d}) − {b} × {c} = <span class="blank"></span> <small>(× first)</small>')
         answers.append(("B1", str((a + d) - b * c)))
-    skip = rng.choice([3, 4, 5, 10])
+
+    skip = rng.choice([3, 4, 5, 6 if hard else 5, 10])
     seq = [skip * i for i in range(1, 6)]
-    html += q_li(f'Find the missing number: {seq[0]}, {seq[1]}, {seq[2]}, ___, {seq[4]} → '
-                 f'<span class="blank"></span>')
+    html += q_li(f'Missing term: {seq[0]}, {seq[1]}, {seq[2]}, ___, {seq[4]} → <span class="blank"></span>')
     answers.append(("B2", str(seq[3])))
-    # diagram bonus
-    rows, cols = 3, 4
-    html += q_li(f'Challenge: total squares in the array?<br>'
-                 + diagram(svg_array(rows, cols, rng), f"{rows}×{cols}")
-                 + '<span class="blank"></span>')
-    answers.append(("B3", str(rows * cols)))
+
+    if slot % 2 == 0:
+        rows, cols = rng.randint(2, 4), rng.randint(3, 6)
+        html += q_li(f'Array total?<br>' + diagram(svg_array(rows, cols, rng), f"{rows}×{cols}")
+                     + '<span class="blank"></span>')
+        answers.append(("B3", str(rows * cols)))
+    else:
+        d, num = rng.choice([2, 4, 8]), rng.randint(1, 3)
+        html += q_li(f'Quick fraction:<br>' + diagram(svg_frac_pie(num, d, rng), f"{num}/{d}")
+                     + '<span class="blank"></span>')
+        answers.append(("B3", f"{num}/{d}"))
+
     html += '</ol>'
     return "Bonus Challenge (5 mins)", html, answers
 
 # ─── Page builder ────────────────────────────────────────────────────────────
 def build_lesson(n, rng):
+    reset_lesson_trackers()
     topic, subtitle = LESSONS[n]
     sections = []
     all_answers = []
